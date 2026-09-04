@@ -3,6 +3,26 @@
 Map consultation agent tool for AIOrchestrator (plugin): finds addresses and places of
 interest, and plans travel routes — powered by the free, no-API-key OpenStreetMap services.
 
+This tool represents a versatile solution for exploring the surrounding territory, offering
+professionals and individuals the ability to access detailed geographic information with
+remarkable simplicity. For businesses, it becomes a valuable strategic ally, enabling the
+identification of specific commercial activities in any geographic area while supporting market
+analysis through the mapping of competitors and services present in a given region. Sales teams
+can leverage it to generate new business contacts, while corporate logistics benefits from
+optimized route planning for deliveries or technical interventions. For private users, the tool
+transforms into a daily guide for discovering restaurants, pharmacies, ATMs, parks, museums,
+and tourist attractions nearby, facilitating the search for essential services and leisure
+venues. The platform supports various search methods: category-based search allows quick
+identification of all establishments of a particular type, while name-based search enables
+finding a specific place by typing its address or business name. An advanced search function
+applies precise filters, such as locating restaurants with a specific cuisine type,
+wheelchair-accessible facilities, or establishments open 24 hours a day. Route calculation
+completes the experience by providing detailed driving directions with distances and travel
+times, adaptable to different transportation modes including driving, cycling, or walking. With
+global coverage extending to every country worldwide, this search engine proves to be a
+powerful and reliable tool both for those making strategic business decisions and for those
+simply looking for a good restaurant or essential service nearby.
+
 ## Agent surface
 
 | Agent method | Purpose |
