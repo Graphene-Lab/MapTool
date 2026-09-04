@@ -253,9 +253,8 @@ static class Program
         Log.IsEnabled = true;
 
         const string prompt =
-            "Use the map tool's find_route method to calculate the walking route between these exact coordinates:\n" +
-            "from lat 45.46391, lon 9.19064 (Piazza del Duomo, Milano) to lat 45.46760, lon 9.18911 (Teatro alla Scala, Milano).\n" +
-            "Set mode to Walking. Then report the distance and the estimated time EXACTLY as returned by the tool — do not estimate or compute them yourself.";
+            "You are in Milan. Give the user walking directions from Piazza del Duomo to Teatro alla Scala:\n" +
+            "distance, estimated time and the main steps of the route. Reply in Italian.";
 
         try
         {
