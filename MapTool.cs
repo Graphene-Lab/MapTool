@@ -40,14 +40,15 @@ public class MapTool : BaseAgentTool, IDisposable
     #region Public methods
 
     /// <summary>Finds a place, address or establishment by name and returns its coordinates (geocoding).
-    /// Accepts natural-language queries: a city ("Milan"), a full address ("Via Roma 10, Milano"), a
-    /// landmark ("Colosseum") or an establishment name ("Ristorante Da Mario, Firenze"). Including the
-    /// city in the query gives more precise results.</summary>
+    /// Accepts natural-language queries: a city ("Milan"), a full address ("Via Roma 10, Milano"), a landmark ("Colosseum") or an establishment name ("Ristorante Da Mario, Firenze").
+    /// Including the city in the query gives more precise results.</summary>
     /// <param name="query">Place, address or establishment to find (free text, up to 200 characters).</param>
     /// <param name="maxResults">Maximum number of matches to return (1-10, default 5). Results are ordered by relevance.</param>
     /// <param name="lat">Optional latitude that makes results near this point rank first (from another search_address() row).</param>
     /// <param name="lon">Optional longitude that makes results near this point rank first (from another search_address() row). Provide it together with <paramref name="lat"/>.</param>
-    /// <returns>One line per match: "N. display name | type: type | coords: lat lon" (coordinates: decimal degrees, period as decimal separator). Empty array when nothing matches; single "Error: ..." line when the call failed.</returns>
+    /// <returns>One line per match: "N. display name | type: type | coords: lat lon".
+    /// Coordinates are decimal degrees, period as decimal separator.
+    /// Empty array when nothing matches; single "Error: ..." line when the call failed.</returns>
     public string[] SearchAddress(string query, int maxResults = 5, double? lat = null, double? lon = null)
     {
         Log.LogStep($"MapTool.SearchAddress: '{query}' (max={maxResults}, bias={lat?.ToString(CultureInfo.InvariantCulture)} {lon?.ToString(CultureInfo.InvariantCulture)})");
@@ -88,14 +89,15 @@ public class MapTool : BaseAgentTool, IDisposable
     }
 
     /// <summary>Lists places of a chosen category within a radius around a point, closest first.
-    /// Uses the coordinates of a search_address() result row as center. To filter by any other
-    /// OpenStreetMap tag (e.g. cuisine), use search_poi_by_tags().</summary>
+    /// Uses the coordinates of a search_address() result row as center.
+    /// To filter by any other OpenStreetMap tag (e.g. cuisine), use search_poi_by_tags().</summary>
     /// <param name="category">Category of places to list (e.g. Restaurant, Pharmacy, Hotel, Museum, FuelStation, Parking, ATM).</param>
     /// <param name="lat">Latitude of the center point (decimal degrees, from a search_address() row, e.g. 45.46420).</param>
     /// <param name="lon">Longitude of the center point (decimal degrees, from a search_address() row, e.g. 9.19000).</param>
     /// <param name="radiusMeters">Search radius in meters around the point (1-25000, default 1000). Use 500-1000 for a local search, more for a wider area.</param>
     /// <param name="maxResults">Maximum number of places to return (1-25, default 10).</param>
-    /// <returns>One line per place, closest first: "N. name | distance | tagkey:tagvalue | address | coords: lat lon". Empty array when no place of that category is within the radius; single "Error: ..." line when the call failed.</returns>
+    /// <returns>One line per place, closest first: "N. name | distance | tagkey:tagvalue | address | coords: lat lon".
+    /// Empty array when no place of that category is within the radius; single "Error: ..." line when the call failed.</returns>
     public string[] SearchPoi(PoiCategory category, double lat, double lon, int radiusMeters = 1000, int maxResults = 10)
     {
         Log.LogStep($"MapTool.SearchPoi: '{category}' around ({FormatCoord(lat)}, {FormatCoord(lon)}) r={radiusMeters}m");
@@ -113,7 +115,8 @@ public class MapTool : BaseAgentTool, IDisposable
     /// <param name="lon">Longitude of the center point (decimal degrees, from a search_address() row).</param>
     /// <param name="radiusMeters">Search radius in meters around the point (1-25000, default 1000).</param>
     /// <param name="maxResults">Maximum number of places to return (1-25, default 10).</param>
-    /// <returns>Same row format as search_poi(): "N. name | distance | key:value | address | coords: lat lon", closest first. Empty array when nothing matches within the radius; single "Error: ..." line when the call failed.</returns>
+    /// <returns>Same row format as search_poi(): "N. name | distance | key:value | address | coords: lat lon", closest first.
+    /// Empty array when nothing matches within the radius; single "Error: ..." line when the call failed.</returns>
     public string[] SearchPoiByTags(string osmKey, string osmValue, double lat, double lon, int radiusMeters = 1000, int maxResults = 10)
     {
         Log.LogStep($"MapTool.SearchPoiByTags: '{osmKey}'='{osmValue}' around ({FormatCoord(lat)}, {FormatCoord(lon)}) r={radiusMeters}m");
@@ -129,7 +132,8 @@ public class MapTool : BaseAgentTool, IDisposable
     /// <param name="toLat">Latitude of the destination point (decimal degrees).</param>
     /// <param name="toLon">Longitude of the destination point (decimal degrees).</param>
     /// <param name="mode">Travel mode: Driving (car), Walking (on foot) or Cycling (bicycle). Default Driving.</param>
-    /// <returns>Multi-line text: "Distance: X km — Estimated time: N min (mode)." followed by one numbered step per line, e.g. "1. Head east on Via Torino (350 m)". Single line starting with "Error:" when the route cannot be calculated.</returns>
+    /// <returns>Multi-line text: "Distance: X km — Estimated time: N min (mode)." followed by one numbered step per line, e.g. "1. Head east on Via Torino (350 m)".
+    /// Single line starting with "Error:" when the route cannot be calculated.</returns>
     public string FindRoute(double fromLat, double fromLon, double toLat, double toLon, TravelMode mode = TravelMode.Driving)
     {
         Log.LogStep($"MapTool.FindRoute: ({FormatCoord(fromLat)}, {FormatCoord(fromLon)}) → ({FormatCoord(toLat)}, {FormatCoord(toLon)}) mode={mode}");
