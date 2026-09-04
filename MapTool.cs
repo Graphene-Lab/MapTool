@@ -1,12 +1,16 @@
 using System.Globalization;
 using System.Net;
+using System.Runtime.CompilerServices;
 using System.Text.Json;
+
+[assembly: InternalsVisibleTo("MapTool.Harness")]
 
 namespace AIOrchestrator.API;
 
 /// <summary>Map lookups for agent use: find addresses, places of interest around a point, and travel routes.
 /// Coordinates are decimal degrees (lat -90..90, lon -180..180, period as decimal separator), e.g. 45.46420 9.19000 for Milan.
-/// Start with search_address() to turn a name or address into coordinates, then pass the coordinates of a result row to search_poi() or find_route().</summary>
+/// Start with search_address() to turn a name or address into coordinates, then pass the coordinates of a result row to search_poi() or find_route().
+/// Distances, travel times and routes must only come from tool results — never from memory.</summary>
 public class MapTool : BaseAgentTool, IDisposable
 {
     private const string NominatimEndpoint = "https://nominatim.openstreetmap.org/search";
@@ -101,16 +105,16 @@ public class MapTool : BaseAgentTool, IDisposable
     public string[] SearchPoi(PoiCategory category, double lat, double lon, int radiusMeters = 1000, int maxResults = 10)
     {
         Log.LogStep($"MapTool.SearchPoi: '{category}' around ({FormatCoord(lat)}, {FormatCoord(lon)}) r={radiusMeters}m");
-        var filter = BuildPoiFilter(category);
-        if (filter == null)
+        var filters = BuildPoiFilters(category);
+        if (filters.Count == 0)
             return Error($"category '{category}' is not supported. Use one of the allowed category values (e.g. Restaurant, Pharmacy, ATM).");
-        return SearchPoiCore(filter.Value.Key, filter.Value.Value, lat, lon, radiusMeters, maxResults);
+        return SearchPoiCore(filters, lat, lon, radiusMeters, maxResults);
     }
 
     /// <summary>Lists places matching a specific OpenStreetMap tag (key = value) within a radius around a point, closest first.
     /// Use this when search_poi() has no category for the filter, e.g. cuisine=italian, wheelchair=yes, opening_hours=24/7, building=church.</summary>
     /// <param name="osmKey">OpenStreetMap tag key (lowercase, no spaces), e.g. "cuisine", "wheelchair", "opening_hours".</param>
-    /// <param name="osmValue">Exact tag value to match, e.g. "italian", "yes", "24/7".</param>
+    /// <param name="osmValue">Exact tag value to match. Use the canonical English OSM value (lowercase, no accents), e.g. "italian", "yes", "24/7" — localized words like "italienne" or "si" match nothing.</param>
     /// <param name="lat">Latitude of the center point (decimal degrees, from a search_address() row).</param>
     /// <param name="lon">Longitude of the center point (decimal degrees, from a search_address() row).</param>
     /// <param name="radiusMeters">Search radius in meters around the point (1-25000, default 1000).</param>
@@ -122,10 +126,11 @@ public class MapTool : BaseAgentTool, IDisposable
         Log.LogStep($"MapTool.SearchPoiByTags: '{osmKey}'='{osmValue}' around ({FormatCoord(lat)}, {FormatCoord(lon)}) r={radiusMeters}m");
         if (string.IsNullOrWhiteSpace(osmKey) || string.IsNullOrWhiteSpace(osmValue))
             return Error("the tag key or value is empty. Provide both, e.g. osmKey=\"cuisine\" osmValue=\"italian\".");
-        return SearchPoiCore(osmKey.Trim().ToLowerInvariant(), osmValue.Trim(), lat, lon, radiusMeters, maxResults);
+        return SearchPoiCore([(osmKey.Trim().ToLowerInvariant(), osmValue.Trim())], lat, lon, radiusMeters, maxResults);
     }
 
-    /// <summary>Calculates the travel route between two points and returns its steps.
+    /// <summary>Calculates the travel route between two places and returns the step-by-step directions with distance and time.
+    /// ALWAYS call this method when the user asks for a route, directions, an itinerary, a path, or travel distance/time between two places in any travel mode — never estimate or answer routes, distances or durations from memory.
     /// Start and end points come from search_address()/search_poi() rows (the "coords: lat lon" values).</summary>
     /// <param name="fromLat">Latitude of the start point (decimal degrees, e.g. 45.46420).</param>
     /// <param name="fromLon">Longitude of the start point (decimal degrees, e.g. 9.19000).</param>
@@ -171,7 +176,7 @@ public class MapTool : BaseAgentTool, IDisposable
 
     #region Shared POI pipeline
 
-    private string[] SearchPoiCore(string key, string value, double lat, double lon, int radiusMeters, int maxResults)
+    private string[] SearchPoiCore(List<(string Key, string Value)> filters, double lat, double lon, int radiusMeters, int maxResults)
     {
         try
         {
@@ -179,15 +184,19 @@ public class MapTool : BaseAgentTool, IDisposable
                 return Error($"the center coordinates ({FormatCoord(lat)}, {FormatCoord(lon)}) are outside the valid ranges. Latitude must be between -90 and 90, longitude between -180 and 180.");
             if (radiusMeters is < 1 or > 25000)
                 return Error($"the radius is {radiusMeters} m. It must be between 1 and 25000 meters (500-5000 recommended).");
-            if (string.IsNullOrWhiteSpace(key) || string.IsNullOrWhiteSpace(value))
-                return Error("the tag key or value is empty. Provide both, e.g. osmKey=\"amenity\" osmValue=\"restaurant\".");
+            if (filters.Count == 0 || filters.Any(f => string.IsNullOrWhiteSpace(f.Key) || string.IsNullOrWhiteSpace(f.Value)))
+                return Error("no valid tag filter was provided. Use a category value, or osmKey/osmValue, e.g. osmKey=\"amenity\" osmValue=\"restaurant\".");
 
             var limit = Math.Clamp(maxResults, 1, 25);
-            var safeKey = EscapeQueryValue(key);
-            var safeValue = EscapeQueryValue(value);
+            var label = $"{filters[0].Key}={filters[0].Value}";
 
-            // "out center" returns coordinates for ways/relations too (nodes carry lat/lon directly).
-            var query = $"[out:json][timeout:30];(nwr(around:{radiusMeters},{lat.ToString(CultureInfo.InvariantCulture)},{lon.ToString(CultureInfo.InvariantCulture)})[\"{safeKey}\"=\"{safeValue}\"];);out center;";
+            // "out center" returns coordinates for ways/relations too (nodes carry lat/lon
+            // directly). A category may map to several canonical OSM tags (union): each clause
+            // is an nwr(...) selection inside the same parenthesized set.
+            var around = $"around:{radiusMeters},{lat.ToString(CultureInfo.InvariantCulture)},{lon.ToString(CultureInfo.InvariantCulture)}";
+            var union = string.Concat(filters.Select(f =>
+                $"nwr({around})[\"{EscapeQueryValue(f.Key)}\"=\"{EscapeQueryValue(f.Value)}\"];"));
+            var query = $"[out:json][timeout:30];({union});out center;";
             PaceOverpass();
 
             string? json = null;
@@ -211,13 +220,13 @@ public class MapTool : BaseAgentTool, IDisposable
             var hits = ParseOverpassHits(json, lat, lon, limit);
             if (hits.Count == 0)
             {
-                Log.LogStep($"MapTool: no '{key}={value}' within {radiusMeters} m of ({FormatCoord(lat)}, {FormatCoord(lon)})");
+                Log.LogStep($"MapTool: no '{label}' within {radiusMeters} m of ({FormatCoord(lat)}, {FormatCoord(lon)})");
                 return [];
             }
 
             var rows = hits.Select((h, i) =>
                 $"{i + 1}. {h.Name} | {FormatDistance(h.DistanceMeters)} | {h.Key}:{h.Value} | {h.Address} | coords: {FormatCoord(h.Latitude)} {FormatCoord(h.Longitude)}").ToArray();
-            Log.LogStep($"MapTool: {rows.Length} '{key}={value}' result(s) near ({FormatCoord(lat)}, {FormatCoord(lon)})");
+            Log.LogStep($"MapTool: {rows.Length} '{label}' result(s) near ({FormatCoord(lat)}, {FormatCoord(lon)})");
             return rows;
         }
         catch (Exception ex)
@@ -489,93 +498,116 @@ public class MapTool : BaseAgentTool, IDisposable
         }
     }
 
-    private static (string Key, string Value)? BuildPoiFilter(PoiCategory category) => category switch
+    /// <summary>Resolves a category to its canonical OpenStreetMap tag clause(s). Most categories
+    /// match ONE canonical key=value (the enum forces the fixed OSM vocabulary — the agent never
+    /// types free text, so the search language cannot break it); a few match several canonical
+    /// tags used in different regions (union), e.g. theatres tagged either amenity=theatre or
+    /// tourism=theatre.</summary>
+    internal static List<(string Key, string Value)> BuildPoiFilters(PoiCategory category) => category switch
     {
         // Food & Drink
-        PoiCategory.Restaurant => ("amenity", "restaurant"),
-        PoiCategory.FastFood => ("amenity", "fast_food"),
-        PoiCategory.Bar => ("amenity", "bar"),
-        PoiCategory.Cafe => ("amenity", "cafe"),
-        PoiCategory.Pub => ("amenity", "pub"),
-        PoiCategory.IceCream => ("amenity", "ice_cream"),
-        PoiCategory.Bakery => ("shop", "bakery"),
-        PoiCategory.Butcher => ("shop", "butcher"),
+        PoiCategory.Restaurant => [("amenity", "restaurant")],
+        PoiCategory.FastFood => [("amenity", "fast_food")],
+        PoiCategory.Bar => [("amenity", "bar")],
+        PoiCategory.Cafe => [("amenity", "cafe")],
+        PoiCategory.Pub => [("amenity", "pub")],
+        PoiCategory.IceCream => [("amenity", "ice_cream")],
+        PoiCategory.Bakery => [("shop", "bakery")],
+        PoiCategory.Butcher => [("shop", "butcher")],
 
         // Shops
-        PoiCategory.Supermarket => ("shop", "supermarket"),
-        PoiCategory.ConvenienceStore => ("shop", "convenience"),
-        PoiCategory.ClothingStore => ("shop", "clothes"),
-        PoiCategory.ElectronicsStore => ("shop", "electronics"),
-        PoiCategory.Bookstore => ("shop", "books"),
-        PoiCategory.HardwareStore => ("shop", "hardware"),
-        PoiCategory.SportsShop => ("shop", "sports"),
-        PoiCategory.ToyStore => ("shop", "toys"),
-        PoiCategory.Optician => ("shop", "optician"),
-        PoiCategory.Laundry => ("shop", "laundry"),
-        PoiCategory.DryCleaning => ("shop", "dry_cleaning"),
-        PoiCategory.Hairdresser => ("shop", "hairdresser"),
-        PoiCategory.BeautySalon => ("shop", "beauty"),
-        PoiCategory.CarDealership => ("shop", "car"),
-        PoiCategory.CarRepair => ("shop", "car_repair"),
-        PoiCategory.MotorcycleShop => ("shop", "motorcycle"),
-        PoiCategory.BicycleShop => ("shop", "bicycle"),
-        PoiCategory.Florist => ("shop", "florist"),
-        PoiCategory.JewelryStore => ("shop", "jewelry"),
-        PoiCategory.FurnitureStore => ("shop", "furniture"),
+        PoiCategory.Supermarket => [("shop", "supermarket")],
+        PoiCategory.ConvenienceStore => [("shop", "convenience")],
+        PoiCategory.ClothingStore => [("shop", "clothes")],
+        PoiCategory.ElectronicsStore => [("shop", "electronics")],
+        PoiCategory.Bookstore => [("shop", "books")],
+        PoiCategory.HardwareStore => [("shop", "hardware")],
+        PoiCategory.SportsShop => [("shop", "sports")],
+        PoiCategory.ToyStore => [("shop", "toys")],
+        PoiCategory.Optician => [("shop", "optician")],
+        PoiCategory.Laundry => [("shop", "laundry")],
+        PoiCategory.DryCleaning => [("shop", "dry_cleaning")],
+        PoiCategory.Hairdresser => [("shop", "hairdresser")],
+        PoiCategory.BeautySalon => [("shop", "beauty")],
+        PoiCategory.CarDealership => [("shop", "car")],
+        PoiCategory.CarRepair => [("shop", "car_repair")],
+        PoiCategory.MotorcycleShop => [("shop", "motorcycle")],
+        PoiCategory.BicycleShop => [("shop", "bicycle")],
+        PoiCategory.Florist => [("shop", "florist")],
+        PoiCategory.JewelryStore => [("shop", "jewelry")],
+        PoiCategory.FurnitureStore => [("shop", "furniture")],
+        PoiCategory.MobilePhoneShop => [("shop", "mobile_phone")],
+        PoiCategory.ShoeShop => [("shop", "shoes")],
+        PoiCategory.DepartmentStore => [("shop", "department_store")],
+        PoiCategory.ShoppingMall => [("shop", "mall")],
+        PoiCategory.GiftShop => [("shop", "gift")],
+        PoiCategory.PetShop => [("shop", "pet")],
 
         // Public services
-        PoiCategory.Pharmacy => ("amenity", "pharmacy"),
-        PoiCategory.Hospital => ("amenity", "hospital"),
-        PoiCategory.Doctors => ("amenity", "doctors"),
-        PoiCategory.Dentist => ("amenity", "dentist"),
-        PoiCategory.Veterinary => ("amenity", "veterinary"),
-        PoiCategory.School => ("amenity", "school"),
-        PoiCategory.Kindergarten => ("amenity", "kindergarten"),
-        PoiCategory.College => ("amenity", "college"),
-        PoiCategory.University => ("amenity", "university"),
-        PoiCategory.Library => ("amenity", "library"),
-        PoiCategory.PostOffice => ("amenity", "post_office"),
-        PoiCategory.Police => ("amenity", "police"),
-        PoiCategory.FireStation => ("amenity", "fire_station"),
-        PoiCategory.PublicToilet => ("amenity", "toilets"),
-        PoiCategory.ATM => ("amenity", "atm"),
-        PoiCategory.Bank => ("amenity", "bank"),
-        PoiCategory.FuelStation => ("amenity", "fuel"),
-        PoiCategory.Parking => ("amenity", "parking"),
+        PoiCategory.Pharmacy => [("amenity", "pharmacy")],
+        PoiCategory.Hospital => [("amenity", "hospital")],
+        PoiCategory.Doctors => [("amenity", "doctors")],
+        PoiCategory.Dentist => [("amenity", "dentist")],
+        PoiCategory.Veterinary => [("amenity", "veterinary")],
+        PoiCategory.School => [("amenity", "school")],
+        PoiCategory.Kindergarten => [("amenity", "kindergarten")],
+        PoiCategory.College => [("amenity", "college")],
+        PoiCategory.University => [("amenity", "university")],
+        PoiCategory.Library => [("amenity", "library")],
+        PoiCategory.PostOffice => [("amenity", "post_office")],
+        PoiCategory.Police => [("amenity", "police")],
+        PoiCategory.FireStation => [("amenity", "fire_station")],
+        PoiCategory.PublicToilet => [("amenity", "toilets")],
+        PoiCategory.ATM => [("amenity", "atm")],
+        PoiCategory.Bank => [("amenity", "bank")],
+        PoiCategory.FuelStation => [("amenity", "fuel")],
+        PoiCategory.Parking => [("amenity", "parking")],
+        PoiCategory.ChargingStation => [("amenity", "charging_station")],
+        PoiCategory.CurrencyExchange => [("amenity", "bureau_de_change")],
+        PoiCategory.CarWash => [("amenity", "car_wash")],
+        PoiCategory.Taxi => [("amenity", "taxi")],
+        PoiCategory.DrinkingWater => [("amenity", "drinking_water")],
 
         // Tourism & leisure
-        PoiCategory.Hotel => ("tourism", "hotel"),
-        PoiCategory.Hostel => ("tourism", "hostel"),
-        PoiCategory.GuestHouse => ("tourism", "guest_house"),
-        PoiCategory.CampSite => ("tourism", "camp_site"),
-        PoiCategory.Museum => ("tourism", "museum"),
-        PoiCategory.ArtGallery => ("tourism", "art_gallery"),
-        PoiCategory.Theatre => ("amenity", "theatre"),
-        PoiCategory.Cinema => ("amenity", "cinema"),
-        PoiCategory.Monument => ("historic", "monument"),
-        PoiCategory.Attraction => ("tourism", "attraction"),
-        PoiCategory.Zoo => ("tourism", "zoo"),
-        PoiCategory.Aquarium => ("tourism", "aquarium"),
-        PoiCategory.Viewpoint => ("tourism", "viewpoint"),
-        PoiCategory.Park => ("leisure", "park"),
-        PoiCategory.Nightclub => ("amenity", "nightclub"),
-        PoiCategory.Casino => ("amenity", "casino"),
+        PoiCategory.Hotel => [("tourism", "hotel")],
+        PoiCategory.Hostel => [("tourism", "hostel")],
+        PoiCategory.GuestHouse => [("tourism", "guest_house")],
+        PoiCategory.CampSite => [("tourism", "camp_site")],
+        PoiCategory.Museum => [("tourism", "museum")],
+        PoiCategory.ArtGallery => [("tourism", "art_gallery")],
+        // Both OSM tags are in use for theatres across regions — union for faithful coverage.
+        PoiCategory.Theatre => [("amenity", "theatre"), ("tourism", "theatre")],
+        PoiCategory.Cinema => [("amenity", "cinema")],
+        PoiCategory.Monument => [("historic", "monument")],
+        PoiCategory.Attraction => [("tourism", "attraction")],
+        PoiCategory.Zoo => [("tourism", "zoo")],
+        PoiCategory.Aquarium => [("tourism", "aquarium")],
+        PoiCategory.Viewpoint => [("tourism", "viewpoint")],
+        PoiCategory.Park => [("leisure", "park")],
+        PoiCategory.Nightclub => [("amenity", "nightclub")],
+        PoiCategory.Casino => [("amenity", "casino")],
+        PoiCategory.Gym => [("leisure", "fitness_centre")],
+        PoiCategory.Playground => [("leisure", "playground")],
+        PoiCategory.SwimmingPool => [("leisure", "swimming_pool")],
+        PoiCategory.DogPark => [("leisure", "dog_park")],
+        PoiCategory.TouristInformation => [("tourism", "information")],
 
         // Transport
-        PoiCategory.Station => ("railway", "station"),
-        PoiCategory.Airport => ("aeroway", "aerodrome"),
-        PoiCategory.BicycleRental => ("amenity", "bicycle_rental"),
-        PoiCategory.CarRental => ("amenity", "car_rental"),
-        PoiCategory.BusStation => ("amenity", "bus_station"),
-        PoiCategory.FerryTerminal => ("amenity", "ferry_terminal"),
-        PoiCategory.SubwayStation => ("railway", "subway_entrance"),
+        PoiCategory.Station => [("railway", "station")],
+        PoiCategory.Airport => [("aeroway", "aerodrome")],
+        PoiCategory.BicycleRental => [("amenity", "bicycle_rental")],
+        PoiCategory.CarRental => [("amenity", "car_rental")],
+        PoiCategory.BusStation => [("amenity", "bus_station")],
+        PoiCategory.FerryTerminal => [("amenity", "ferry_terminal")],
+        PoiCategory.SubwayStation => [("railway", "subway_entrance")],
+        PoiCategory.TramStop => [("railway", "tram_stop")],
 
         // Other
-        PoiCategory.PlaceOfWorship => ("amenity", "place_of_worship"),
-        PoiCategory.CommunityCenter => ("amenity", "community_centre"),
-        PoiCategory.SocialClub => ("amenity", "social_centre"),
+        PoiCategory.PlaceOfWorship => [("amenity", "place_of_worship")],
+        PoiCategory.CommunityCenter => [("amenity", "community_centre")],
+        PoiCategory.SocialClub => [("amenity", "social_centre")],
 
-        _ => null
+        _ => []
     };
 
     private static bool IsValidCoordinates(double lat, double lon) => lat is >= -90 and <= 90 && lon is >= -180 and <= 180;
@@ -638,14 +670,17 @@ public enum PoiCategory
     Supermarket, ConvenienceStore, ClothingStore, ElectronicsStore, Bookstore, HardwareStore,
     SportsShop, ToyStore, Optician, Laundry, DryCleaning, Hairdresser, BeautySalon,
     CarDealership, CarRepair, MotorcycleShop, BicycleShop, Florist, JewelryStore, FurnitureStore,
+    MobilePhoneShop, ShoeShop, DepartmentStore, ShoppingMall, GiftShop, PetShop,
     // Public services
     Pharmacy, Hospital, Doctors, Dentist, Veterinary, School, Kindergarten, College, University,
     Library, PostOffice, Police, FireStation, PublicToilet, ATM, Bank, FuelStation, Parking,
+    ChargingStation, CurrencyExchange, CarWash, Taxi, DrinkingWater,
     // Tourism & leisure
     Hotel, Hostel, GuestHouse, CampSite, Museum, ArtGallery, Theatre, Cinema, Monument,
     Attraction, Zoo, Aquarium, Viewpoint, Park, Nightclub, Casino,
+    Gym, Playground, SwimmingPool, DogPark, TouristInformation,
     // Transport
-    Station, Airport, BicycleRental, CarRental, BusStation, FerryTerminal, SubwayStation,
+    Station, Airport, BicycleRental, CarRental, BusStation, FerryTerminal, SubwayStation, TramStop,
     // Other
     PlaceOfWorship, CommunityCenter, SocialClub
 }

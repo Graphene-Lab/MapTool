@@ -136,6 +136,47 @@ static class Program
             return null;
         });
 
+        Run(11, "OSM fidelity: every PoiCategory maps to canonical clauses (offline)", () =>
+        {
+            foreach (var cat in Enum.GetValues<PoiCategory>())
+            {
+                var clauses = MapTool.BuildPoiFilters(cat);
+                if (clauses.Count == 0) return $"{cat} maps to no OSM tag clause";
+                if (clauses.Any(c => string.IsNullOrWhiteSpace(c.Key) || string.IsNullOrWhiteSpace(c.Value)))
+                    return $"{cat} maps to an empty clause";
+            }
+
+            // Spot checks of canonical (language-independent) OSM values.
+            string? Find(PoiCategory cat, string key) => MapTool.BuildPoiFilters(cat).FirstOrDefault(c => c.Key == key).Value;
+            var checks = new (PoiCategory Cat, string Key, string Value)[]
+            {
+                (PoiCategory.Restaurant, "amenity", "restaurant"),
+                (PoiCategory.Bakery, "shop", "bakery"),
+                (PoiCategory.DryCleaning, "shop", "dry_cleaning"),
+                (PoiCategory.Pharmacy, "amenity", "pharmacy"),
+                (PoiCategory.ATM, "amenity", "atm"),
+                (PoiCategory.ChargingStation, "amenity", "charging_station"),
+                (PoiCategory.CurrencyExchange, "amenity", "bureau_de_change"),
+                (PoiCategory.Gym, "leisure", "fitness_centre"),
+                (PoiCategory.Playground, "leisure", "playground"),
+                (PoiCategory.Hotel, "tourism", "hotel"),
+                (PoiCategory.Theatre, "amenity", "theatre"),
+                (PoiCategory.Cinema, "amenity", "cinema"),
+                (PoiCategory.SubwayStation, "railway", "subway_entrance"),
+                (PoiCategory.TramStop, "railway", "tram_stop"),
+                (PoiCategory.Airport, "aeroway", "aerodrome"),
+                (PoiCategory.CommunityCenter, "amenity", "community_centre")
+            };
+            foreach (var (cat, key, value) in checks)
+            {
+                var got = Find(cat, key);
+                if (got != value) return $"{cat}: expected {key}={value}, got {key}={got}";
+            }
+            if (!MapTool.BuildPoiFilters(PoiCategory.Theatre).Any(c => c is ("tourism", "theatre")))
+                return "Theatre should also match tourism=theatre (regional tagging)";
+            return null;
+        });
+
         Console.WriteLine($"\n{ok}/{total} passed, {fail} failed {(fail == 0 ? "ALL OK!" : "")}");
         WriteResult($"DONE {ok}/{total} passed, {fail} failed");
         Environment.ExitCode = fail == 0 ? 0 : 1;
