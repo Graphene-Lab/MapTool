@@ -15,8 +15,14 @@ static class Program
     // powershell -Command "$f='<temp>\maptool_test_results.txt'; while(-not (Get-Content $f -Raw -ErrorAction SilentlyContinue) -match 'DONE'){ Start-Sleep 1 }; Get-Content $f -Tail 20"
     static readonly string ResultsFile = Path.Combine(Path.GetTempPath(), "maptool_test_results.txt");
 
-    static void Main()
+    static void Main(string[] args)
     {
+        if (args.Length > 0 && args[0] == "agent")
+        {
+            RunAgentTest();
+            return;
+        }
+
         File.WriteAllText(ResultsFile, $"RUN {DateTime.Now:HH:mm:ss}\n");
         Log.IsEnabled = true;
         WriteResult("STARTED");
@@ -88,6 +94,48 @@ static class Program
             return null;
         });
 
+        Run(7, "route: driving Duomo → Linate airport", () =>
+        {
+            using var tool = new MapTool();
+            var result = tool.FindRoute(duomo[0]!.Value, duomo[1]!.Value, 45.4494, 9.2763, TravelMode.Driving);
+            if (result.StartsWith("Error:")) return result;
+            if (!result.Contains("by car")) return "missing 'by car' in route result";
+            if (!result.Contains("\n1. ")) return "missing step-by-step instructions";
+            return null;
+        });
+
+        Run(8, "route: cycling Duomo → Stazione Centrale", () =>
+        {
+            using var tool = new MapTool();
+            var result = tool.FindRoute(duomo[0]!.Value, duomo[1]!.Value, 45.4860, 9.2043, TravelMode.Cycling);
+            if (result.StartsWith("Error:")) return result;
+            if (!result.Contains("by cycling")) return "missing 'by cycling' in route result";
+            if (!result.Contains("\n1. ")) return "missing step-by-step instructions";
+            return null;
+        });
+
+        Run(9, "POI categories: pharmacy, ATM and museum around Duomo", () =>
+        {
+            using var tool = new MapTool();
+            foreach (var cat in new[] { PoiCategory.Pharmacy, PoiCategory.ATM, PoiCategory.Museum })
+            {
+                var rows = tool.SearchPoi(cat, duomo[0]!.Value, duomo[1]!.Value, radiusMeters: 1500, maxResults: 3);
+                if (rows.Length == 0 || rows[0].StartsWith("Error:"))
+                    return $"{cat} search failed: {(rows.Length > 0 ? rows[0] : "no rows within 1500 m of the Duomo")}";
+            }
+            return null;
+        });
+
+        Run(10, "no matches return empty arrays (not errors)", () =>
+        {
+            using var tool = new MapTool();
+            var poi = tool.SearchPoiByTags("amenity", "zz_nonexistent_tag", duomo[0]!.Value, duomo[1]!.Value, radiusMeters: 600);
+            if (poi.Length != 0) return $"expected an empty array for a nonexistent tag, got: {string.Join(" | ", poi)}";
+            var addr = tool.SearchAddress("zzqqxxww nonexistent locality 987654321", maxResults: 3);
+            if (addr.Length != 0) return $"expected an empty array for a nonsense address, got: {string.Join(" | ", addr)}";
+            return null;
+        });
+
         Console.WriteLine($"\n{ok}/{total} passed, {fail} failed {(fail == 0 ? "ALL OK!" : "")}");
         WriteResult($"DONE {ok}/{total} passed, {fail} failed");
         Environment.ExitCode = fail == 0 ? 0 : 1;
@@ -148,5 +196,61 @@ static class Program
         if (d.EndsWith(" km", StringComparison.Ordinal) &&
             double.TryParse(d[..^3], NumberStyles.Float, CultureInfo.InvariantCulture, out var km)) return km * 1000;
         return null;
+    }
+
+    /// <summary>Agent-driven check: the LLM must drive MapTool through a realistic multi-step
+    /// map request (geocode → POI → route) via AgentHarness. Run with: dotnet run -- agent.
+    /// Verifies the LLM-facing contract (method discoverability, parameter cross-references)
+    /// by inspecting the MapTool LogStep lines afterwards.</summary>
+    static void RunAgentTest()
+    {
+        Console.WriteLine("Agent-driven MapTool test (DeepSeekBridge)...");
+        var testDir = Path.Combine(Path.GetTempPath(), "MapAgent_" + Guid.NewGuid().ToString("N")[..6]);
+        Directory.CreateDirectory(testDir);
+        Setup.DocumentsPath = testDir;
+        Setup.ProviderConfig = ProviderConfigs.Get("DeepSeekBridge");
+        Log.IsEnabled = true;
+
+        const string prompt =
+            "Use the map tool's find_route method to calculate the walking route between these exact coordinates:\n" +
+            "from lat 45.46391, lon 9.19064 (Piazza del Duomo, Milano) to lat 45.46760, lon 9.18911 (Teatro alla Scala, Milano).\n" +
+            "Set mode to Walking. Then report the distance and the estimated time EXACTLY as returned by the tool — do not estimate or compute them yourself.";
+
+        try
+        {
+            var orch = new AgentHarness("DeepSeekBridge");
+            using var done = new ManualResetEventSlim();
+            AgentHarness.AgentProgressEventArgs? final = null;
+            orch.AgentProgress += (_, e) =>
+            {
+                if (e.State is AgentHarness.AgentState.Completed or AgentHarness.AgentState.Failed)
+                { final = e; done.Set(); }
+            };
+            var task = Task.Run(() => orch.ExecuteAction(prompt, new[] { "MapTool" }, maxIterations: 40));
+            done.Wait(TimeSpan.FromSeconds(120));
+            var result = task.GetAwaiter().GetResult();
+
+            var logFile = Log.CurrentLogFile ?? Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "logs", Environment.ProcessId + ".txt");
+            Console.WriteLine($"State: {final?.State} | Iterations: {result.Iterations} | ms: {result.TotalElapsedMs}");
+            Console.WriteLine($"Log file: {logFile}");
+            Console.WriteLine($"Agent error: {(string.IsNullOrEmpty(result.Error) ? "(none)" : result.Error)}");
+
+            var allLines = File.Exists(logFile) ? File.ReadAllLines(logFile).ToList() : [];
+            var actions = allLines.Where(l => l.Contains("MapTool.")).Select(l => l.Trim()).ToList();
+            Console.WriteLine("MapTool actions in log:");
+            foreach (var a in actions) Console.WriteLine($"  {a}");
+
+            var routeOk = actions.Any(a => a.Contains("FindRoute") && a.Contains("Walking"));
+            var completed = final?.State == AgentHarness.AgentState.Completed && string.IsNullOrEmpty(result.Error);
+
+            Console.WriteLine($"\nChecks: route(walking)={routeOk} completed={completed}");
+            Console.WriteLine(routeOk && completed ? "AGENT TEST PASS" : "AGENT TEST FAIL");
+            Environment.ExitCode = routeOk && completed ? 0 : 1;
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"AGENT TEST CRASH {ex.GetType().Name}: {ex.Message}");
+            Environment.ExitCode = 1;
+        }
     }
 }
