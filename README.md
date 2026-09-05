@@ -83,4 +83,4 @@ A plain push is a code-only sync and publishes nothing. The repository must stay
 
 ## License
 
-[Andrea Bruno License 1.4](LICENSE.md)
+[GNU Affero General Public License v3.0](LICENSE.md)
