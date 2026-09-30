@@ -7,7 +7,7 @@ using System.Text.Json;
 
 namespace AIOrchestrator.API;
 
-/// <summary>Map lookups for agent use: find addresses, places of interest around a point, and travel routes.
+/// <summary>Look up maps and directions: find addresses, places of interest around a point, and travel routes.
 /// Coordinates are decimal degrees (lat -90..90, lon -180..180, period as decimal separator), e.g. 45.46420 9.19000 for Milan.
 /// Start with search_address() to turn a name or address into coordinates, then pass the coordinates of a result row to search_poi() or find_route().
 /// Distances, travel times and routes must only come from tool results — never from memory.</summary>
