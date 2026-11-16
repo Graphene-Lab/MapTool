@@ -75,8 +75,10 @@ Push a tag `v*` (date version, e.g. `v1.26.09.04`) — the two workflows publish
 
 - `plugin-release.yml` → GitHub Release with the self-contained `MapTool-<version>.zip`,
   which the hosts (AgentBridge, AIOffice) install into `Tools/MapTool/`.
-- `publish.yml` → NuGet package `Graphene.MapTool` (the repository needs the `NUGET_API_KEY`
-  secret — same key as the other Graphene-Lab repos).
+- `publish.yml` → NuGet package `Graphene.MapTool`, published with trusted publishing
+  (`NuGet/login@v1` plus `permissions: id-token: write`). Nothing to set on the repository:
+  the credential is minted per run and expires in minutes, and nuget.org holds a policy that
+  names this repository and `publish.yml`.
 
 A plain push is a code-only sync and publishes nothing. The repository must stay **public**
 (the hosts download the release zip anonymously).
