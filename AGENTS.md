@@ -34,6 +34,5 @@ routes — over the OpenStreetMap services (Nominatim, Overpass, OSRM).
 
 ## Shipping
 
-Publishes a GitHub release zip **and** a NuGet package, but **no host fetches it**: AgentBridge
-ships seven plugins and does not include MapTool, and AIOffice does not build it. It is installed
-by hand into `Tools/MapTool`.
+Publishes a GitHub release zip **and** a NuGet package; AgentBridge ships it in every release
+(added to the fetch list on 2026-11-19). AIOffice does not build it into its dev `Tools/`.
