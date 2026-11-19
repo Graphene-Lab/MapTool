@@ -16,7 +16,7 @@ OpenStreetMap services); it reads/writes no files, so the file-oriented points a
 ## Agent-facing descriptions
 
 - OK — docs never mention internals (HttpClient, Overpass/OSRM/Nominatim names, parsing).
-- OK — minimal text; rendered GeToolDefinitions ≈ 6.8 KB incl. inherited `load_skill` and the enum vocabulary.
+- OK — minimal text; rendered GetToolDefinitions ≈ 6.8 KB incl. inherited `load_skill` and the enum vocabulary.
 - OK — methods state what they do (outcomes), not how.
 - OK — nothing mentions a sandbox or virtual paths (no file paths at all).
 - N/A — no path-bearing methods.
